@@ -1,0 +1,416 @@
+---
+title: "diabetes prediction"
+output: html_document
+date: "2024-05-01"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#### Load the package
+
+```{r}
+library(naniar)
+library(ggplot2)
+library(tidyverse)
+library(tidymodels)
+library(corrplot)
+library(ggthemes)
+library(finalfit)
+library(conflicted)
+
+tidymodels_prefer()
+```
+
+#### Data Preparation
+
+```{r}
+diabete_data = read_csv("diabetes_prediction_dataset.csv", show_col_types = F)
+head(diabete_data)
+```
+
+##### tidy the dataset
+
+```{r}
+dim(diabete_data)
+
+diabete_data$gender = as.factor(diabete_data$gender)
+diabete_data$hypertension = as.factor(diabete_data$hypertension)
+diabete_data$heart_disease = as.factor(diabete_data$heart_disease)
+diabete_data$smoking_history = as.factor(diabete_data$smoking_history)
+diabete_data$diabetes = as.factor(diabete_data$diabetes)
+```
+
+##### dataset summary
+
+```{r}
+summary(diabete_data)
+```
+
+##### missing data
+
+```{r}
+diabete_data %>%
+  missing_plot()
+```
+
+#### EDA
+
+##### Distribution of cltv
+
+```{r}
+diabete_data %>%
+  ggplot(aes(diabetes)) +
+  geom_bar(width = 0.4, aes(fill = diabetes)) +
+  scale_fill_manual(values = c("#1f77b4", "#ff7f0e"), 
+                    labels = c("Non-diabetic", "Diabetic")) +
+  theme_gray()
+```
+
+##### Correlation of numeric variables and factor variable with 2 levels
+
+```{r}
+diabete_data %>%
+  select(where(~is.numeric(.) || (is.factor(.) && nlevels(.) == 2))) %>%
+  mutate(across(where(~is.factor(.) && nlevels(.) == 2), as.numeric)) %>%
+  cor() %>%
+  corrplot(method = "circle",
+           diag = F,
+           tl.col = "black",
+           addCoef.col = 1, 
+           number.cex = 0.7)
+```
+
+##### diabetes v.s. age and BMI
+
+```{r}
+p1 = diabete_data %>%
+  ggplot(aes(x = diabetes, y = age, fill = diabetes)) +
+  geom_boxplot() +
+  scale_fill_manual(values = c("#1f77b4", "#ff7f0e"), 
+                    labels = c("Non-diabetic", "Diabetic")) +
+  theme_gray()
+
+p2 = diabete_data %>%
+  ggplot(aes(x = diabetes, y = bmi, fill = diabetes)) +
+  geom_boxplot() +
+  scale_fill_manual(values = c("#1f77b4", "#ff7f0e"), 
+                    labels = c("Non-diabetic", "Diabetic")) +
+  theme_gray()
+
+grid.arrange(p1, p2, ncol = 2)
+```
+
+##### age v.s. BMI
+
+```{r, message = FALSE}
+diabete_data %>%
+  ggplot(aes(x = age, y = bmi)) +
+  geom_point() +
+  geom_smooth() +
+  theme_gray()
+```
+
+##### diabetes v.s. blood glucose level and HbA1c level
+
+```{r}
+ppp1 = diabete_data %>%
+  ggplot(aes(x = diabetes, y = blood_glucose_level, fill = diabetes)) +
+  geom_boxplot() +
+  scale_fill_manual(values = c("#1f77b4", "#ff7f0e"), 
+                    labels = c("Non-diabetic", "Diabetic")) +
+  theme_gray()
+
+ppp2 = diabete_data %>%
+  ggplot(aes(x = diabetes, y = HbA1c_level, fill = diabetes)) +
+  geom_boxplot() +
+  scale_fill_manual(values = c("#1f77b4", "#ff7f0e"), 
+                    labels = c("Non-diabetic", "Diabetic")) +
+  theme_gray()
+
+grid.arrange(ppp1, ppp2, ncol = 2)
+```
+
+##### diabetes v.s. gender
+
+```{r}
+diabete_data %>%
+  group_by(gender, diabetes) %>%
+  summarise(count = n(), .groups = 'drop') %>%
+  ggplot(aes(x = gender, y = count, fill = factor(diabetes))) +
+  geom_col(width = 0.5) +  
+  scale_fill_manual(values = c("#1f77b4", "#ff7f0e"), 
+                    labels = c("Non-diabetic", "Diabetic")) +
+  labs(title = "Diabetes Status Across Smoking Histories",
+       x = "gender",
+       y = "Count",
+       fill = "Diabetes Status") +
+  theme_gray()
+```
+
+##### diabetes v.s. smoking history
+
+```{r}
+diabete_data %>%
+  group_by(smoking_history, diabetes) %>%
+  summarise(count = n(), .groups = 'drop') %>%
+  ggplot(aes(x = smoking_history, y = count, fill = factor(diabetes))) +
+  geom_col(width = 0.5) +  
+  scale_fill_manual(values = c("#1f77b4", "#ff7f0e"), 
+                    labels = c("Non-diabetic", "Diabetic")) +
+  labs(title = "Diabetes Status Across Smoking Histories",
+       x = "Smoking History",
+       y = "Count",
+       fill = "Diabetes Status") +
+  theme_gray()
+```
+
+#### Setting up model
+
+```{r}
+diabete_data_new = diabete_data %>%
+  filter(gender != "Other")
+
+diabete_data_new %>%
+  group_by(gender) %>%
+  summarise(count = n())
+
+diabete_data_new$gender = factor(diabete_data_new$gender, 
+                                    level = c("Female", "Male"))
+```
+
+##### Split dataset
+
+```{r}
+dia_split = diabete_data_new %>% initial_split(prop = 0.8, strata = diabetes)
+
+dia_train = dia_split %>% training()
+dia_test = dia_split %>% testing()
+
+dim(dia_train)
+dim(dia_test)
+```
+
+##### Create recipe
+
+```{r}
+dia_rec = 
+  recipe(diabetes ~ ., data = dia_train) %>%
+  step_dummy(all_nominal_predictors()) %>%
+  step_center(all_predictors()) %>%
+  step_scale(all_predictors())
+
+dia_rec %>%
+  prep() %>%
+  juice() %>%
+  names()
+```
+
+##### Resampling with k fold cross-validation
+
+```{r}
+folds <- vfold_cv(dia_train, v = 10)
+folds
+```
+
+#### Build up models 
+
+##### Log-regression
+
+```{r}
+log_reg <- logistic_reg() %>% 
+  set_engine("glm") %>% 
+  set_mode("classification")
+
+log_wflow <- workflow() %>%
+  add_model(log_reg) %>%
+  add_recipe(dia_rec)
+```
+
+##### LDA
+
+```{r}
+library(discrim)
+
+lda_mod <- discrim_linear() %>% 
+  set_mode("classification") %>% 
+  set_engine("MASS")
+
+lda_wflow <- workflow() %>%
+  add_model(lda_mod) %>%
+  add_recipe(dia_rec)
+```
+
+##### Naive Bayes
+
+```{r}
+library(klaR)
+
+nb_mod <- naive_Bayes() %>% 
+  set_mode("classification") %>% 
+  set_engine("klaR") %>% 
+  set_args(usekernel = FALSE) 
+
+nb_wflow <- workflow() %>% 
+  add_model(nb_mod) %>% 
+  add_recipe(dia_rec)
+```
+
+##### random forest
+
+```{r}
+library(ranger)
+
+rf_mod <- rand_forest(mtry = NULL, min_n = NULL, trees = 1000) %>%
+  set_mode("classification") %>% 
+  set_engine("ranger")
+
+rf_wflow <- workflow() %>%
+  add_model(rf_mod) %>%
+  add_recipe(dia_rec)
+```
+
+#### Model evaluation
+
+##### Log-regression
+
+```{r}
+# log-regression
+log_result <- log_wflow %>%
+  fit_resamples(
+    resamples = folds, 
+    metrics = metric_set(recall, precision, f_meas, accuracy, kap, roc_auc, sens, spec),
+    control = control_resamples(save_pred = TRUE))
+
+log_pred <- 
+  log_result %>%
+  collect_predictions()
+
+log_pred %>%
+  group_by(id) |># id contains our folds
+  roc_curve(diabetes, .pred_0) |>
+  autoplot()
+```
+
+##### LDA
+
+```{r}
+# LDA-regression
+lda_result <- lda_wflow %>%
+  fit_resamples(
+    resamples = folds, 
+    metrics = metric_set(recall, precision, f_meas, accuracy, kap, roc_auc, sens, spec),
+    control = control_resamples(save_pred = TRUE))
+
+lda_pred <- 
+  lda_result %>%
+  collect_predictions()
+
+lda_pred %>%
+  group_by(id) |># id contains our folds
+  roc_curve(diabetes, .pred_0) |>
+  autoplot()
+```
+
+##### Naive Bayes
+
+```{r, message = FALSE}
+# NB-regression
+nb_result <- nb_wflow %>%
+  fit_resamples(
+    resamples = folds, 
+    metrics = metric_set(recall, precision, f_meas, accuracy, kap, roc_auc, sens, spec),
+    control = control_resamples(save_pred = TRUE))
+
+nb_pred <- 
+  nb_result %>%
+  collect_predictions()
+
+nb_pred %>%
+  group_by(id) |># id contains our folds
+  roc_curve(diabetes, .pred_0) |>
+  autoplot()
+```
+
+##### Random Forest
+
+```{r}
+# LDA-regression
+rf_result <- rf_wflow %>%
+  fit_resamples(
+    resamples = folds, 
+    metrics = metric_set(recall, precision, f_meas, accuracy, kap, roc_auc, sens, spec),
+    control = control_resamples(save_pred = TRUE))
+
+rf_pred <- 
+  lda_result %>%
+  collect_predictions()
+
+rf_pred %>%
+  group_by(id) |># id contains our folds
+  roc_curve(diabetes, .pred_0) |>
+  autoplot()
+```
+
+#### Model selection by 
+
+```{r}
+log_metrics <- 
+  log_result %>%
+  collect_metrics() %>%
+  mutate(model = "Logistic Regression")
+
+lda_metrics <- 
+  lda_result |>
+  collect_metrics() %>%
+  mutate(model = "Linear Discrimant Analysis") # add the name of the model to every row
+
+nb_metrics <- 
+  nb_result |>
+  collect_metrics() %>%
+  mutate(model = "Naive Bayes") # add the name of the model to every row
+
+rf_metrics <- 
+  rf_result |>
+  collect_metrics() %>%
+  mutate(model = "Random Forest")
+
+model_compare <- bind_rows(log_metrics,
+                           lda_metrics,
+                           nb_metrics,
+                           rf_metrics)
+
+model_comp <- 
+  model_compare %>%
+  select(model, .metric, mean, std_err) %>%
+  pivot_wider(names_from = .metric, values_from = c(mean, std_err))
+```
+
+```{r}
+# show mean area under the ROC curve per model
+model_comp |>
+  arrange(mean_roc_auc) |>
+  mutate(model = fct_reorder(model, mean_roc_auc)) %>%
+  ggplot(aes(model, mean_roc_auc, fill=model)) +
+  geom_col(width = 0.6) +
+  coord_flip() +
+  scale_fill_brewer(palette = "Blues") + 
+     geom_text(
+     size = 3,
+     aes(label = round(mean_roc_auc, 2), y = mean_roc_auc + 0.08),
+     vjust = 1
+  )
+```
+
+#### Putting the model to the test dataset
+
+```{r}
+augment(rf_fit, new_data = dia_test) %>%
+  roc_curve(diabetes, .pred_0) %>%
+  autoplot()
+```
+
+
+
+
