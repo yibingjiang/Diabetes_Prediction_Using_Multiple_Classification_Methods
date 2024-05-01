@@ -1,6 +1,6 @@
 ---
 title: "diabetes prediction"
-output: html_document
+output: github_document
 date: "2024-05-01"
 ---
 
